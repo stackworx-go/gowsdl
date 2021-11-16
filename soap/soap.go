@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io/ioutil"
+	"mime"
 	"net"
 	"net/http"
 	"time"
@@ -491,13 +492,39 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 	defer res.Body.Close()
 
 	if res.StatusCode >= 400 {
-		body, _ := ioutil.ReadAll(res.Body)
-		return &HTTPError{
-			StatusCode:   res.StatusCode,
-			ResponseBody: body,
+		nonXmlResp, err := isTextOrJson(res.Header.Get("Content-Type"))
+		if err != nil {
+			return err
+		}
+		if nonXmlResp {
+			body, _ := ioutil.ReadAll(res.Body)
+			return &HTTPError{
+				StatusCode:   res.StatusCode,
+				ResponseBody: body,
+			}
+		} else {
+			return s.parseResponse(res, response, faultDetail, retAttachments)
 		}
 	}
 
+	return s.parseResponse(res, response, faultDetail, retAttachments)
+}
+
+func isTextOrJson(contentType string) (bool, error) {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false, err
+	}
+	if mediaType == "application/json" {
+		return true, nil
+	}
+	if mediaType == "text/plain" {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (s *Client) parseResponse(res *http.Response, response interface{}, faultDetail FaultError, retAttachments *[]MIMEMultipartAttachment) error {
 	// xml Decoder (used with and without MTOM) cannot handle namespace prefixes (yet),
 	// so we have to use a namespace-less response envelope
 	respEnvelope := new(SOAPEnvelopeResponse)
@@ -514,7 +541,7 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 	}
 
 	var mmaBoundary string
-	if s.opts.mma{
+	if s.opts.mma {
 		mmaBoundary, err = getMmaHeader(res.Header.Get("Content-Type"))
 		if err != nil {
 			return err

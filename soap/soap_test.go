@@ -852,3 +852,57 @@ func TestHTTPError(t *testing.T) {
 	}
 
 }
+
+func TestSoapFaultHTTPError(t *testing.T) {
+	type httpErrorTest struct {
+		name         string
+		responseCode int
+		responseBody string
+		faultCode    string
+		faultDetail  string
+	}
+
+	tests := []httpErrorTest{
+		{
+			name:         "500 error with soap fault",
+			responseCode: http.StatusInternalServerError,
+			responseBody: `<?xml version="1.0" encoding="utf-8"?>
+			<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+				<soap:Body>
+					<soap:Fault>
+						<faultcode>soap:Server</faultcode>
+						<faultstring>Custom error message.</faultstring>
+						<detail>Some extra detail</detail>
+					</soap:Fault>
+				</soap:Body>
+			</soap:Envelope>`,
+			faultCode: "soap:Server",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Add("Content-Type", "application/xop+xml")
+				w.WriteHeader(test.responseCode)
+				w.Write([]byte(test.responseBody))
+			}))
+			defer ts.Close()
+			client := NewClient(ts.URL)
+			gotErr := client.Call("GetData", &Ping{}, &PingResponse{})
+
+			if gotErr == nil {
+				t.Fatalf("Expected an error from call.  Received none")
+			}
+			fault, ok := gotErr.(*SOAPFault)
+			if !ok {
+				t.Fatalf("Expected a HTTPError.  Received: %s", gotErr.Error())
+			}
+
+			if fault.Code != test.faultCode {
+				t.Fatalf("Unexpected Fault Code.  Got %s", fault.Code)
+			}
+		})
+	}
+
+}
